@@ -1,174 +1,129 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+import cv2
+import easyocr
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+import uuid
+from ultralytics import YOLO
 
-# C extensions
-*.so
+# ------------------ Configuration ------------------ #
+IMAGE_PATHS = [
+    'gun.jpg',
+    'TANK.jpg',
+    'jet.webp',
+    'grenade.jpg',
+    'soldier.jpg',
+    'tejas.jpg'
+]
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+# Create output directory for cropped OCR regions
+CROP_OUTPUT_DIR = 'ocr_crops'
+os.makedirs(CROP_OUTPUT_DIR, exist_ok=True)
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+# Initialize EasyOCR Reader
+reader = easyocr.Reader(['en'], gpu=False)
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+# Load YOLOv8 pretrained model for object detection
+model = YOLO("yolov8s.pt")  # Load pretrained YOLOv8 model
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
+# ------------------ Processing Loop ------------------ #
+for image_path in IMAGE_PATHS:
+    if not os.path.exists(image_path):
+        print(f"Image not found: {image_path}")
+        continue
 
-# Translations
-*.mo
-*.pot
+    # ------------------ Load and Preprocess ------------------ #
+    image = cv2.imread(image_path)
+    if image is None:
+        print(f"Failed to load: {image_path}")
+        continue
 
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray_image, threshold1=100, threshold2=200)
 
-# Flask stuff:
-instance/
-.webassets-cache
+    # ------------------ Image Segmentation ------------------ #
+    _, thresh = cv2.threshold(gray_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    segmented_image = image.copy()
+    cv2.drawContours(segmented_image, contours, -1, (0, 255, 255), 2)
+    segmented_image_rgb = cv2.cvtColor(segmented_image, cv2.COLOR_BGR2RGB)
 
-# Scrapy stuff:
-.scrapy
+    # ------------------ Weapon Detection with YOLO ------------------ #
+    results = model(image_path)  # Run YOLOv8 for object detection
 
-# Sphinx documentation
-docs/_build/
+    # Extract bounding boxes and labels
+    boxes = results[0].boxes.xyxy.cpu().numpy()  # Bounding box coordinates
+    labels = results[0].names  # Labels of detected objects (e.g., 'gun', 'tank')
+    confidences = results[0].boxes.conf.cpu().numpy()  # Confidence scores
 
-# PyBuilder
-.pybuilder/
-target/
+    # Initialize flag for weapons detected
+    detected_weapons = []
 
-# Jupyter Notebook
-.ipynb_checkpoints
+    # Define a set of object categories to look for
+    target_labels = ['jet', 'gun', 'tank', 'grenade']
 
-# IPython
-profile_default/
-ipython_config.py
+    # Loop through detections to check for the specific targets
+    for box, label, confidence in zip(boxes, labels, confidences):
+        if confidence > 0.5:
+            x1, y1, x2, y2 = box
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
 
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
+            # Draw the bounding box and label
+            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(image, f"{label}: {confidence:.2f}", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
 
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
+            # Check if the label is in our target labels and print a message
+            if label in target_labels and label not in detected_weapons:
+                detected_weapons.append(label)
+                print(f"{label.capitalize()} detected")
 
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#uv.lock
+    # ------------------ OCR Detection & Cropping ------------------ #
+    results = reader.readtext(image)
+    image_with_boxes = image.copy()
 
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
+    for i, (bbox, text, prob) in enumerate(results):
+        if prob > 0.5:
+            (top_left, _, bottom_right, _) = bbox
+            top_left = tuple(map(int, top_left))
+            bottom_right = tuple(map(int, bottom_right))
 
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
-#   https://pdm.fming.dev/latest/usage/project/#working-with-version-control
-.pdm.toml
-.pdm-python
-.pdm-build/
+            # Clamp coordinates within image bounds
+            x1 = max(0, top_left[0])
+            y1 = max(0, top_left[1])
+            x2 = min(image.shape[1], bottom_right[0])
+            y2 = min(image.shape[0], bottom_right[1])
 
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
+            # Draw bounding box and label
+            cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(image_with_boxes, text, (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
 
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
+            # Crop and save region
+            cropped = image[y1:y2, x1:x2]
+            if cropped.size == 0:
+                continue  # Skip empty crops
 
-# SageMath parsed files
-*.sage.py
+            safe_text = "".join(c for c in text if c.isalnum())[:10] or "text"
+            crop_filename = f"{os.path.splitext(os.path.basename(image_path))[0]}_{safe_text}_{uuid.uuid4().hex[:6]}.png"
+            crop_path = os.path.join(CROP_OUTPUT_DIR, crop_filename)
+            cv2.imwrite(crop_path, cropped)
 
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+    image_with_boxes_rgb = cv2.cvtColor(image_with_boxes, cv2.COLOR_BGR2RGB)
 
-# Spyder project settings
-.spyderproject
-.spyproject
+    # ------------------ Visualization ------------------ #
+    fig, axs = plt.subplots(1, 6, figsize=(30, 6))
+    fig.suptitle(f"Processing: {os.path.basename(image_path)}", fontsize=16)
 
-# Rope project settings
-.ropeproject
+    titles = ["Original Image", "Grayscale", "Edge Detection", "OCR Detection", "Segmentation", "Detected Weapon"]
+    images = [image_rgb, gray_image, edges, image_with_boxes_rgb, segmented_image_rgb, cv2.cvtColor(image, cv2.COLOR_BGR2RGB)]
+    cmaps = [None, 'gray', 'gray', None, None, None]
 
-# mkdocs documentation
-/site
+    for ax, img, title, cmap in zip(axs, images, titles, cmaps):
+        ax.imshow(img, cmap=cmap)
+        ax.set_title(title)
+        ax.axis('off')
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
-
-# Ruff stuff:
-.ruff_cache/
-
-# PyPI configuration file
-.pypirc
+    plt.tight_layout()
+    plt.show()
